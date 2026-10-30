@@ -1,0 +1,86 @@
+# HIF fault locator on a microcontroller
+
+Runs a high-impedance-fault (HIF) region locator as **real firmware** on a **simulated ARM
+Cortex-M4F** (STM32F407 in [Renode](https://renode.io)): feature extraction and model inference in
+C, measured for flash, RAM, stack and executed instructions across configurations.
+
+The features come from the undergraduate thesis *Feature Selection for Region Locating of High
+Impedance Faults* (UFMG). It ranks 15 substation-measurable features, taken from 7056 candidates
+built on DFT, Stockwell and wavelet transforms, for locating an HIF in one of four regions of an
+adapted IEEE 34-node feeder. This project asks what those features cost on a device, compared with
+using all of them or random subsets of the same size.
+
+> **Status: work in progress.** Done: toolchain, bare-metal firmware running in Renode, and a
+> Python reference that reproduces the thesis's features exactly. Next: model conversion, C
+> feature extraction with CMSIS-DSP, on-device benchmarking.
+
+## How it fits together
+
+```
+ Python (PC)                                    C firmware (simulated Cortex-M4F)
+ thesis data -> features.py -> model            raw window (test vector)
+                    |             |                    |
+                    |             +-- convert --> model.h --> prediction
+                    +-- port ----------------> features.c (CMSIS-DSP)
+ test windows ------------------------------> test_vectors.h
+                                                       |
+       compare features and predictions  <------- UART output
+```
+
+Every C function has a Python reference, and features and predictions are compared on every test
+vector before any measurement is reported.
+
+## Layout
+
+```
+python/      feature reference, split, selection, models, baseline
+firmware/    src/ (startup, UART, main), include/ (generated headers), linker.ld, Makefile,
+             third_party/ (CMSIS-DSP v1.18.0, CMSIS_6 v6.4.0 as submodules)
+renode/      .resc script and Robot Framework tests
+results/     tables and plots
+report/      write-up, including report/features.md (exact feature definitions)
+```
+
+## Setup
+
+```bash
+git clone --recurse-submodules <this repo>     # or: git submodule update --init --depth 1
+
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+- **ARM compiler:** `sudo apt install gcc-arm-none-eabi`, or the Arm GNU Toolchain tarball from
+  developer.arm.com (developed with 14.3.rel1).
+- **Renode:** 1.17.0 or newer from the [releases page](https://github.com/renode/renode/releases).
+  `renode-test` also needs the Python packages listed in Renode's `tests/requirements.txt`.
+- **Thesis data:** the Python side reads the thesis repository (feature matrices, raw simulations,
+  selection code). Point `HIF_THESIS` at it if it is not at the default path in `python/paths.py`.
+
+## Usage
+
+```bash
+# Firmware
+make -C firmware                      # -> firmware/build/hif.elf
+make -C firmware size                 # flash / RAM usage
+renode renode/hif.resc                # run with a UART window
+renode-test renode/hello.robot        # headless boot check
+
+# Python (data/ is derived and not versioned)
+.venv/bin/python python/make_split.py        # fixed train/test split, grouped by soil
+.venv/bin/python python/export_windows.py    # raw test windows + parity check vs the thesis
+.venv/bin/python python/select_train.py      # thesis selection re-run on the training split
+.venv/bin/python python/baseline.py          # models x feature sets on the test split
+.venv/bin/python -m pytest python -q         # reference vs pywt / scipy / thesis code
+```
+
+## Method notes
+
+- **Fixed split:** 7 of 34 HIF soil models are held out, giving 6345 train and 1645 test
+  simulations at 40 dB SNR. Holding out whole soils keeps one arc waveform from appearing on
+  both sides.
+- **Selection on training data only:** the thesis published its ranking from all simulations, so
+  it is re-run here, with the same code and configuration, on the training soils alone.
+- **Reference parity:** `python/features.py` reproduces the thesis's 7056 features to float32
+  rounding (max relative error 6.9e-8) on all 1645 test simulations.
+- **Instruction counts are not time:** Renode is a functional simulator. Counts compare
+  configurations; they ignore pipeline stalls, flash wait states and memory latency.
