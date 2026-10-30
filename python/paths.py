@@ -1,0 +1,30 @@
+"""Locations shared by every script. The thesis repo is read, never written."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+DATA = REPO / "data"
+RESULTS = REPO / "results"
+FIRMWARE_INCLUDE = REPO / "firmware" / "include"
+
+THESIS = Path("/home/pedrofaluba/tcc")
+THESIS_FEATURES = THESIS / "data" / "processed" / "features_snr_{snr}.parquet"
+THESIS_CLUSTERS = THESIS / "data" / "processed" / "clusters_snr_{snr}.npz"
+THESIS_RAW = THESIS / "data" / "raw" / "distilled"
+THESIS_RANKING = THESIS / "reports" / "snr_{snr}" / "run_b.json"
+
+SNR = "40"
+
+SPLIT = DATA / "split.json"
+FEATURES = DATA / f"features_snr{SNR}.npz"
+TEST_WINDOWS = DATA / f"test_windows_snr{SNR}.npz"
+
+
+def import_thesis() -> None:
+    """Make the thesis package (`hif`) and its scripts importable."""
+    for p in (THESIS / "src", THESIS / "scripts"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
