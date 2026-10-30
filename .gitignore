@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+firmware/build/
+*.su
+renode/*.log
+renode/robot_output.xml
+renode/log.html
+renode/report.html
+robot_output.xml
+log.html
+report.html
+
+# Heavy derived arrays; only the split definition is versioned.
+data/*
+!data/split.json
+logs/

@@ -1,0 +1,7 @@
+[submodule "firmware/third_party/CMSIS-DSP"]
+	path = firmware/third_party/CMSIS-DSP
+	url = https://github.com/ARM-software/CMSIS-DSP.git
+	branch = main
+[submodule "firmware/third_party/CMSIS_6"]
+	path = firmware/third_party/CMSIS_6
+	url = https://github.com/ARM-software/CMSIS_6.git
