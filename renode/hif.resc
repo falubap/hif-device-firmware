@@ -1,0 +1,11 @@
+:name: HIF fault locator on STM32F4 Discovery
+:description: Runs firmware/build/hif.elf and shows USART2 output.
+:usage: renode renode/hif.resc   (or `make run` from firmware/)
+
+$elf?=@$ORIGIN/../firmware/build/hif.elf
+
+mach create
+machine LoadPlatformDescription @platforms/boards/stm32f4_discovery-kit.repl
+sysbus LoadELF $elf
+showAnalyzer sysbus.usart2
+start
