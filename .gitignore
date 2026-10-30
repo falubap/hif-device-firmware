@@ -12,7 +12,10 @@ robot_output.xml
 log.html
 report.html
 
-# Heavy derived arrays; only the split definition is versioned.
-data/*
-!data/split.json
+# Derived data, never committed (rebuild with python/make_split.py and python/export_windows.py).
+data/
 logs/
+
+# Local working notes, not published.
+CLAUDE.md
+PLAN.md
