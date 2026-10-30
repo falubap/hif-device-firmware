@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -10,7 +11,8 @@ DATA = REPO / "data"
 RESULTS = REPO / "results"
 FIRMWARE_INCLUDE = REPO / "firmware" / "include"
 
-THESIS = Path("/home/pedrofaluba/tcc")
+#: The thesis repository (code, feature matrices, raw simulations). Override with HIF_THESIS.
+THESIS = Path(os.environ.get("HIF_THESIS", "/home/pedrofaluba/tcc"))
 THESIS_FEATURES = THESIS / "data" / "processed" / "features_snr_{snr}.parquet"
 THESIS_CLUSTERS = THESIS / "data" / "processed" / "clusters_snr_{snr}.npz"
 THESIS_RAW = THESIS / "data" / "raw" / "distilled"

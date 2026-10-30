@@ -7,7 +7,7 @@ soil share the same arc waveform, so splitting by row would put that waveform on
 Every soil carries the same scenario grid, so the region mix is identical on both sides.
 
 Outputs:
-    data/split.json          the definition (versioned): test soils and file ids
+    data/split.json          the definition: test soils and file ids (reproducible from SEED)
     data/features_snr40.npz  X_train, X_test (raw thesis features, float32), labels, metadata
 """
 
