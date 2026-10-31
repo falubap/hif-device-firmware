@@ -1,0 +1,5 @@
+description,windows,agreement,agreement_thesis_features,device_acc,device_f1_macro,features_ok,gate5
+"logreg (C=1, balanced) on thesis_train (15 features), SNR 40 dB",120,1.0000,1.0000,0.6333,0.6242,1800/1800,PASS
+"tree (depth 8, inline) on thesis_train (15 features), SNR 40 dB",120,1.0000,1.0000,0.7500,0.7323,1800/1800,PASS
+"forest (30 trees, depth 8, inline, soft voting) on thesis_train (15 features), SNR 40 dB",120,1.0000,1.0000,0.7417,0.7251,1800/1800,PASS
+"mlp (16 hidden units) on thesis_train (15 features), SNR 40 dB",120,1.0000,1.0000,0.6917,0.6609,1800/1800,PASS

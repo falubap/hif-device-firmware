@@ -12,9 +12,10 @@ using all of them or random subsets of the same size.
 
 > **Status: work in progress.** Done: toolchain, bare-metal firmware running in Renode, a Python
 > reference that reproduces the thesis's features exactly, four models converted to C that agree
-> 100% with scikit-learn on the simulated board, and C feature extraction (DFT, Stockwell,
-> wavelet on CMSIS-DSP) matching the reference on every test window. Next: full on-device
-> pipeline and benchmarking.
+> 100% with scikit-learn on the simulated board, C feature extraction (DFT, Stockwell,
+> wavelet on CMSIS-DSP) matching the reference on every test window, and the full pipeline
+> (raw window -> features -> model) agreeing 100% with scikit-learn on the simulated board.
+> Next: memory and instruction-count measurements across configurations.
 
 ## How it fits together
 
@@ -76,6 +77,7 @@ renode-test renode/hello.robot        # headless boot check
 .venv/bin/python python/run_device.py model  # that model on the simulated board, all test rows
 .venv/bin/python python/run_device.py host   # C features (PC build) vs python, all test windows
 .venv/bin/python python/run_device.py features   # C features on the simulated board, 120 windows
+.venv/bin/python python/run_device.py full   # whole pipeline on the board: features + prediction
 .venv/bin/python -m pytest python -q         # reference vs pywt / scipy / thesis code
 ```
 
