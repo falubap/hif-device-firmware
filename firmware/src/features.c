@@ -59,8 +59,8 @@ void hif_features_init(void)
 {
     dsp2560_init();
 #if HIF_CFG_STOCKWELL_SLOTS
-    /* Gaussian of each needed voice, exp(-2 pi^2 m^2 / k0^2), m = 0..15h (in double: the
-     * argument reaches 44, where a float32 exponent loses ~3e-6). */
+    /* Gaussian of each needed voice, exp(-2 pi^2 m^2 / k0^2), m = 0..15h. Evaluated directly,
+     * not by recurrence: a^{m^2} would amplify the rounding of a by m^2. */
     uint32_t orders = 0;
     for (int s = 0; s < HIF_CFG_STOCKWELL_SLOTS; s++)
         orders |= hif_cfg_stockwell_orders[s];
@@ -69,20 +69,23 @@ void hif_features_init(void)
         if (!(orders & (1u << (h - 1))))
             continue;
         st_gauss_offset[h - 1] = offset;
-        double k0 = 10.0 * h;
+        const float k0 = 10.0f * h, scale = 2.0f * PI_F * PI_F / (k0 * k0);
         for (int m = 0; m <= ST_M(h); m++)
-            st_gauss[offset++] = (float)exp(-2.0 * 9.8696044010893586 * m * m / (k0 * k0));
+            st_gauss[offset++] = expf(-scale * (float)(m * m));
     }
-    /* B[m] = (1/256) sum_{u<256} e^{j2pi mu/N} = (1 - e^{j2pi m/10}) / (256 (1 - e^{j2pi m/N})) */
-    st_kernel[0].re = 1.0f;
-    st_kernel[0].im = 0.0f;
-    for (int m = 1; m <= ST_M(HIF_CFG_STOCKWELL_MAX_ORDER); m++) {
-        const double two_pi = 6.283185307179586477;
-        double nr = 1.0 - cos(two_pi * m / 10.0), ni = -sin(two_pi * m / 10.0);
-        double dr = 256.0 * (1.0 - cos(two_pi * m / N_SAMPLES)), di = -256.0 * sin(two_pi * m / N_SAMPLES);
-        double den = dr * dr + di * di;
-        st_kernel[m].re = (float)((nr * dr + ni * di) / den);
-        st_kernel[m].im = (float)((ni * dr - nr * di) / den);
+    /* B[m] = (1/256) sum_{u<256} e^{j2pi mu/N} = (1 - e^{ja}) / (256 (1 - e^{jb})), a = 2pi m/10,
+     * b = 2pi m/N. In half-angle form, (1 - e^{ja}) / (1 - e^{jb}) = e^{j(a-b)/2} sin(a/2)/sin(b/2):
+     * the direct form's 1 - cos(b) is ~3e-6 for small m and would lose ~2% in float32. */
+    for (int m = 0; m <= ST_M(HIF_CFG_STOCKWELL_MAX_ORDER); m++) {
+        if (m == 0) {
+            st_kernel[0].re = 1.0f;
+            st_kernel[0].im = 0.0f;
+            continue;
+        }
+        float a = 2.0f * PI_F * m / 10.0f, b = 2.0f * PI_F * m / N_SAMPLES;
+        float mag = sinf(0.5f * a) / (256.0f * sinf(0.5f * b)), ang = 0.5f * (a - b);
+        st_kernel[m].re = mag * cosf(ang);
+        st_kernel[m].im = mag * sinf(ang);
     }
 #endif
 }
@@ -277,9 +280,28 @@ static const float *waveform(int ch, const float x[HIF_RAW][HIF_SAMPLES], int ph
     return x[HIF_IN];
 }
 
+/* One SWT output sample at i, taps x[i + step (4 - k)], k = 0..7 (indices wrapped mod N). */
+static inline void swt_sample_wrapped(const float *a, int i, int step, float *d, float *ap)
+{
+    float dd = 0.0f, aa = 0.0f;
+    for (int k = 0; k < 8; k++) {
+        int idx = i - step * (k - 4);
+        if (idx < 0)
+            idx += N_SAMPLES;
+        else if (idx >= N_SAMPLES)
+            idx -= N_SAMPLES;
+        dd += swt_hi[k] * a[idx];
+        aa += swt_lo[k] * a[idx];
+    }
+    *d = dd;
+    *ap = aa;
+}
+
 /* Per-cycle RMS of the SWT bands in `bands` (bit j: d_{j+1}, bit 8: a8), python: features.wavelet.
  * Level j filters the previous approximation with the filters upsampled by 2^j, circularly:
- *   out[i] = sum_k f[k] x[(i - 2^j (k - 4)) mod N]. */
+ *   out[i] = sum_k f[k] x[(i - 2^j (k - 4)) mod N].
+ * Taps reach i - 3 step .. i + 4 step, so only the first 3 step and last 4 step samples wrap:
+ * those take the wrapped path, the interior a branch-free one (same arithmetic, same result). */
 static void wavelet_bands(const float *in, uint16_t bands, float rms[HIF_BANDS][HIF_CYCLES])
 {
     int levels = (bands & (1u << 8)) ? 8 : 16 - __builtin_clz((uint32_t)bands << 16);
@@ -287,18 +309,21 @@ static void wavelet_bands(const float *in, uint16_t bands, float rms[HIF_BANDS][
     for (int level = 0; level < levels; level++) {
         const int step = 1 << level;
         const int need_d = bands & (1u << level);
+        const int first = 3 * step, last = N_SAMPLES - 4 * step;   /* interior: [first, last) */
         float *out = (level & 1) ? wav_pong : wav_ping;
         float energy[HIF_CYCLES] = {0};
         for (int i = 0; i < N_SAMPLES; i++) {
-            float d = 0.0f, ap = 0.0f;
-            for (int k = 0; k < 8; k++) {
-                int idx = i - step * (k - 4);
-                if (idx < 0)
-                    idx += N_SAMPLES;
-                else if (idx >= N_SAMPLES)
-                    idx -= N_SAMPLES;
-                d += swt_hi[k] * a[idx];
-                ap += swt_lo[k] * a[idx];
+            float d, ap;
+            if (i >= first && i < last) {
+                const float *p = a + i + 4 * step;                    /* tap k = 0 */
+                d = 0.0f;
+                ap = 0.0f;
+                for (int k = 0; k < 8; k++, p -= step) {
+                    d += swt_hi[k] * *p;
+                    ap += swt_lo[k] * *p;
+                }
+            } else {
+                swt_sample_wrapped(a, i, step, &d, &ap);
             }
             out[i] = ap;
             if (need_d)
@@ -492,21 +517,34 @@ static float statistic(int stat, int circular, const float *pre, const float *po
 
 void hif_extract_features(const float x[2][HIF_RAW][HIF_SAMPLES], int phase, float *out)
 {
-    for (int w = 0; w < 2; w++) {
+    hif_extract_features_marked(x, phase, out, 0);
+}
+
+void hif_extract_features_marked(const float x[2][HIF_RAW][HIF_SAMPLES], int phase, float *out,
+                                 void (*mark)(void))
+{
 #if HIF_CFG_DFT_SLOTS
+    for (int w = 0; w < 2; w++)
         analytic(HIF_DFT, x[w], phase, HIF_CFG_DFT_SLOTS, hif_cfg_dft_channel,
                  hif_cfg_dft_orders, dft_coef, w);
 #endif
+    if (mark)
+        mark();
 #if HIF_CFG_STOCKWELL_SLOTS
+    for (int w = 0; w < 2; w++)
         analytic(HIF_STOCKWELL, x[w], phase, HIF_CFG_STOCKWELL_SLOTS, hif_cfg_stockwell_channel,
                  hif_cfg_stockwell_orders, st_coef, w);
 #endif
+    if (mark)
+        mark();
 #if HIF_CFG_WAVELET_SLOTS
+    for (int w = 0; w < 2; w++)
         for (int s = 0; s < HIF_CFG_WAVELET_SLOTS; s++)
             wavelet_bands(waveform(hif_cfg_wavelet_channel[s], x[w], phase),
                           hif_cfg_wavelet_bands[s], wav_rms[s][w]);
 #endif
-    }
+    if (mark)
+        mark();
 
     for (int i = 0; i < HIF_CFG_N_FEATURES; i++) {
         const hif_feature_t *f = &hif_cfg_features[i];
@@ -516,4 +554,6 @@ void hif_extract_features(const float x[2][HIF_RAW][HIF_SAMPLES], int phase, flo
         int circular = f->param == HIF_ANGLE || f->param == HIF_VI_ANGLE;
         out[i] = statistic(f->stat, circular, pre, post);
     }
+    if (mark)
+        mark();
 }

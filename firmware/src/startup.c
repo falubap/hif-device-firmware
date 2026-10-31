@@ -5,10 +5,15 @@
 
 #include <stdint.h>
 
+#include "startup.h"
 #include "uart.h"
 
-extern uint32_t _estack;
+extern uint32_t _estack, _sstack;
 extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss;
+
+/* Stack painting: the free stack is filled with this word at boot; the deepest word that no
+ * longer holds it marks the stack's high-water mark. */
+#define STACK_PAINT 0xDEADBEEFu
 
 int main(void);
 
@@ -22,6 +27,12 @@ void Reset_Handler(void)
     SCB_CPACR |= (0xFu << 20);
     __asm volatile("dsb\n\tisb" ::: "memory");
 
+    /* Paint [_sstack, sp - 64): everything below this function's own frame. */
+    uint32_t sp;
+    __asm volatile("mov %0, sp" : "=r"(sp));
+    for (uint32_t *p = &_sstack; (uint32_t)p < sp - 64; p++)
+        *p = STACK_PAINT;
+
     uint32_t *src = &_sidata;
     for (uint32_t *dst = &_sdata; dst < &_edata;)
         *dst++ = *src++;
@@ -31,6 +42,14 @@ void Reset_Handler(void)
     main();
     for (;;)
         ;
+}
+
+uint32_t stack_peak_bytes(void)
+{
+    const uint32_t *p = &_sstack;
+    while (p < &_estack && *p == STACK_PAINT)
+        p++;
+    return (uint32_t)((const uint8_t *)&_estack - (const uint8_t *)p);
 }
 
 void HardFault_Handler(void)

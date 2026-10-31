@@ -17,7 +17,7 @@ static float scratch[DSP_SPC];
 void dsp2560_init(void)
 {
     for (int q = 0; q <= DSP_N / 4; q++)
-        cos_quarter[q] = (float)cos(2.0 * 3.14159265358979323846 * q / DSP_N);
+        cos_quarter[q] = cosf(6.28318530717958647692f * (float)q / DSP_N);
     arm_rfft_fast_init_256_f32(&rfft256);
 }
 

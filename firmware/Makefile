@@ -3,6 +3,7 @@
 #   make MODE=model      Step 3: model on the reference features in include/test_vectors.h
 #   make MODE=features   Step 4: feature extraction on the raw windows in include/test_vectors.h
 #   make MODE=full       Step 5: raw windows -> features -> model
+#   make MODE=bench      Step 6: instruction-count benchmark (renode/bench.robot)
 #   make host            the feature extractor built for the PC (python/run_device.py host)
 #   make OPT=-O2         same, optimised for speed (the sweep varies this)
 #   make size            flash/RAM usage
@@ -31,7 +32,10 @@ CMSIS_SRCS := $(addprefix $(CMSIS_DSP)/Source/, \
     TransformFunctions/arm_cfft_radix8_f32.c TransformFunctions/arm_bitreversal2.c \
     CommonTables/arm_common_tables.c CommonTables/arm_const_structs.c)
 EXTRACT_SRCS := src/features.c src/dsp2560.c
-ifneq ($(filter features full,$(MODE)),)
+ifneq ($(filter model features full bench,$(MODE)),)
+SRCS += src/model.c
+endif
+ifneq ($(filter features full bench,$(MODE)),)
 SRCS += $(EXTRACT_SRCS)
 CMSIS_OBJS := $(CMSIS_SRCS:$(CMSIS_DSP)/Source/%.c=$(BUILD)/cmsis/%.o)
 endif

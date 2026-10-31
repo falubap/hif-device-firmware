@@ -42,4 +42,9 @@ void hif_features_init(void);
  * phase: faulted phase 0..2 (A..C). */
 void hif_extract_features(const float x[2][HIF_RAW][HIF_SAMPLES], int phase, float *out);
 
+/* Same, calling mark() after each stage (DFT, Stockwell, wavelet, statistics) so a benchmark
+ * can split the cost; stages that the configuration does not use still call it. */
+void hif_extract_features_marked(const float x[2][HIF_RAW][HIF_SAMPLES], int phase, float *out,
+                                 void (*mark)(void));
+
 #endif
