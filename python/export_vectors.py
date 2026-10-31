@@ -51,7 +51,8 @@ def c_floats(values: np.ndarray) -> str:
     return ",".join(f"{float(v):.9e}f" for v in flat)
 
 
-def write_header(rows, labels, phases, ref_features, ref_preds, x=None, note="") -> None:
+def write_header(rows, labels, phases, ref_features, ref_preds, x=None, note="", bench=None) -> None:
+    """bench: (features, preds) of every test row, for the inference benchmark (Step 6)."""
     k = len(rows)
     nf = ref_features.shape[1]
     lines = [
@@ -65,6 +66,7 @@ def write_header(rows, labels, phases, ref_features, ref_preds, x=None, note="")
         "",
         f"#define HIF_TV_COUNT {k}",
         f"#define HIF_TV_HAS_RAW {0 if x is None else 1}",
+        f"#define HIF_TV_HAS_BENCH {0 if bench is None else 1}",
         f"#define HIF_TV_N_FEATURES {nf}",
         "",
         "/* Row in the test split, faulted phase (0..2 = A..C), true region, Python's prediction. */",
@@ -84,6 +86,15 @@ def write_header(rows, labels, phases, ref_features, ref_preds, x=None, note="")
             "/* Raw windows [vector][pre/post][Va Vb Vc Ia Ib Ic In][sample], fs = 15360 Hz. */",
             f"static const float hif_tv_x[{k}][2][{len(features.RAW_CHANNELS)}][{features.N}] = "
             f"{{{c_floats(x)}}};",
+        ]
+    if bench is not None:
+        bf, bp = bench
+        lines += [
+            "",
+            f"#define HIF_BENCH_ROWS {len(bp)}",
+            "/* Inference benchmark: reference features and Python's prediction, every test row. */",
+            f"static const float hif_bench_features[{len(bp)}][{nf}] = {{{c_floats(bf)}}};",
+            f"static const uint8_t hif_bench_pred[{len(bp)}] = {{{','.join(map(str, bp))}}};",
         ]
     lines += ["", "#endif", ""]
     HEADER.write_text("\n".join(lines))
@@ -126,6 +137,21 @@ def export_batch(batch: int, per_batch: int = PER_BATCH) -> dict:
     # preds_thesis: scikit-learn on the thesis's own features (float64 windows).
     return {"rows": rows, "labels": w["y"][rows], "preds": preds,
             "preds_thesis": pipe.predict(thesis), "features": ref}
+
+
+def export_bench(per_batch: int) -> dict:
+    """Step 6 benchmark: the first `per_batch` device windows (raw) for extraction, and every test
+    row's reference features for inference. Returns rows, labels, Python preds for the windows."""
+    cfg, pipe, w, cols = _load()
+    rows = device_rows(w["y"])[:per_batch]
+    ref = w["feat_f32in"][rows][:, cols].astype(np.float32)
+    preds = pipe.predict(ref)
+    allf = np.load(paths.FEATURES, allow_pickle=True)["X_test"][:, cols].astype(np.float32)
+    write_header(rows, w["y"][rows], w["phase"][rows], ref, preds, x=w["x"][rows],
+                 bench=(allf, pipe.predict(allf)),
+                 note=f"{cfg['description']}; benchmark: {len(rows)} raw windows, "
+                      f"{len(allf)} feature rows")
+    return {"rows": rows, "labels": w["y"][rows], "preds": preds}
 
 
 def main() -> None:

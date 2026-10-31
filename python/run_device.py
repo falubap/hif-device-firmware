@@ -35,14 +35,15 @@ def build(mode: str, opt: str = "-Os") -> None:
     subprocess.run(["make", "-s", "-C", str(FIRMWARE), f"MODE={mode}", f"OPT={opt}"], check=True)
 
 
-def run_renode(log_name: str) -> str:
-    """Run the current ELF until DONE; return what USART2 printed."""
+def run_renode(log_name: str, robot: str = "run.robot", extra: dict | None = None) -> str:
+    """Run the current ELF until DONE; return what USART2 printed. extra: more robot variables."""
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     log = RUN_DIR / log_name
     log.unlink(missing_ok=True)
     result = subprocess.run(
-        ["renode-test", str(paths.REPO / "renode" / "run.robot"),
-         "--variable", f"ELF:{ELF}", "--variable", f"UART_LOG:{log}"],
+        ["renode-test", str(paths.REPO / "renode" / robot),
+         "--variable", f"ELF:{ELF}", "--variable", f"UART_LOG:{log}",
+         *(a for k, v in (extra or {}).items() for a in ("--variable", f"{k}:{v}"))],
         cwd=RUN_DIR, capture_output=True, text=True,
     )
     if result.returncode != 0 or not log.exists():
@@ -266,12 +267,13 @@ def elf_flash_bytes() -> int:
     return int(text) + int(data)
 
 
-def record(path, row: dict) -> None:
-    """Upsert one result row, keyed by description, into a CSV."""
+def record(path, row: dict, key: tuple[str, ...] = ("description",)) -> None:
+    """Upsert one result row into a CSV, replacing any row with the same key columns."""
     import pandas as pd
-    df = pd.read_csv(path) if path.exists() else pd.DataFrame()
+    df = pd.read_csv(path, keep_default_na=False) if path.exists() else pd.DataFrame()
     if len(df):
-        df = df[df["description"] != row["description"]]
+        same = np.logical_and.reduce([df[k].astype(str) == str(row[k]) for k in key])
+        df = df[~same]
     pd.concat([df, pd.DataFrame([row])]).to_csv(path, index=False, float_format="%.4f")
 
 
