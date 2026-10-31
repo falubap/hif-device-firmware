@@ -19,3 +19,7 @@ logs/
 # Local working notes, not published.
 CLAUDE.md
 PLAN.md
+
+# Generated per configuration (python/convert.py, python/export_vectors.py).
+firmware/include/model.h
+firmware/include/test_vectors.h

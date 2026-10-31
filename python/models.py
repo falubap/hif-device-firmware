@@ -1,7 +1,8 @@
 """Downstream models and the feature sets they are trained on.
 
-Every model sees the same input transform as the thesis's evaluation: signed log1p, then
-standardisation. The device therefore needs one preprocessing routine regardless of the model.
+Linear and neural models see the thesis's input transform: signed log1p, then standardisation.
+Trees and forests take raw features: they are invariant to monotone transforms, so the transform
+would change nothing but would cost one log1p per feature on the device.
 """
 
 from __future__ import annotations
@@ -25,8 +26,11 @@ def signed_log1p(X: np.ndarray) -> np.ndarray:
     return np.sign(X) * np.log1p(np.abs(X))
 
 
+PREPROCESSED = ("logreg", "mlp")
+
+
 def make_model(kind: str, *, n_trees: int = 30, depth: int = 8, hidden: int = 16):
-    """A fresh, unfitted pipeline: signed log1p -> StandardScaler -> estimator."""
+    """A fresh, unfitted pipeline: [signed log1p -> StandardScaler ->] estimator."""
     if kind == "logreg":
         # The thesis's wrapper/evaluation estimator (tcc/src/hif/selection/pipeline.py).
         est = LogisticRegression(C=1.0, class_weight="balanced", max_iter=1000, random_state=SEED)
@@ -40,10 +44,17 @@ def make_model(kind: str, *, n_trees: int = 30, depth: int = 8, hidden: int = 16
                             random_state=SEED)
     else:
         raise KeyError(kind)
-    return make_pipeline(FunctionTransformer(signed_log1p), StandardScaler(), est)
+    if kind in PREPROCESSED:
+        return make_pipeline(FunctionTransformer(signed_log1p), StandardScaler(), est)
+    return make_pipeline(est)
 
 
 MODELS = ("logreg", "tree", "forest", "mlp")
+
+
+def estimator_input(pipe, X: np.ndarray) -> np.ndarray:
+    """What the final estimator of a fitted pipeline sees for raw features X."""
+    return pipe[:-1].transform(X) if len(pipe) > 1 else X
 
 
 def load_split():
