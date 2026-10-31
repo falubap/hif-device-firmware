@@ -2,6 +2,7 @@
 #   make                 build build/hif.elf (MODE=hello: boot check)
 #   make MODE=model      Step 3: model on the reference features in include/test_vectors.h
 #   make MODE=features   Step 4: feature extraction on the raw windows in include/test_vectors.h
+#   make MODE=full       Step 5: raw windows -> features -> model
 #   make host            the feature extractor built for the PC (python/run_device.py host)
 #   make OPT=-O2         same, optimised for speed (the sweep varies this)
 #   make size            flash/RAM usage
