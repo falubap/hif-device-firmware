@@ -23,3 +23,4 @@ PLAN.md
 # Generated per configuration (python/convert.py, python/export_vectors.py).
 firmware/include/model.h
 firmware/include/test_vectors.h
+firmware/include/feature_config.h

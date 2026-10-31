@@ -1,4 +1,4 @@
-"""Train one configuration and convert it to C: firmware/include/model.h.
+"""Train one configuration and convert it to C: firmware/include/model.h and feature_config.h.
 
     .venv/bin/python python/convert.py --model forest [--features thesis_train]
                                        [--trees 30] [--depth 8] [--hidden 16] [--method inline]
@@ -28,6 +28,7 @@ import joblib
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 
+import feature_config
 import models
 import paths
 
@@ -186,6 +187,7 @@ def main() -> None:
              "mlp": f"{args.hidden} hidden units", "logreg": "C=1, balanced"}[args.model]
     description = f"{args.model} ({hyper}) on {args.features} ({len(ids)} features), SNR {paths.SNR} dB"
     write_header(args.model, pipe, ids, description, args.method)
+    feature_config.write(ids, description)
 
     X = Xte[:, cols].astype(np.float32)
     py = pipe.predict(X)
