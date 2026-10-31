@@ -14,9 +14,29 @@ using all of them or random subsets of the same size.
 > reference that reproduces the thesis's features exactly, four models converted to C that agree
 > 100% with scikit-learn on the simulated board, C feature extraction (DFT, Stockwell,
 > wavelet on CMSIS-DSP) matching the reference on every test window, the full pipeline
-> (raw window -> features -> model) agreeing 100% with scikit-learn on the simulated board, and
-> a measurement harness (flash/RAM per module, stack, exact instruction counts). Next: the
-> automated sweep over feature sets, models and compiler settings.
+> (raw window -> features -> model) agreeing 100% with scikit-learn on the simulated board, a
+> measurement harness, and an 80-configuration sweep over feature sets, models and compiler
+> settings, every point verified on the simulated device. Next: the write-up.
+
+## Main results
+
+![macro-F1 vs instructions per window](results/plots/f1_vs_instructions.png)
+
+- The thesis's 15 features (selected on the training split only) beat every one of 10 random
+  15-feature sets with every model: forest macro-F1 0.781 against a random best of 0.491.
+- Using all 7056 features costs 4.4x the instructions per window (74.8 M vs 17.2 M) and buys no
+  accuracy (forest 0.754, tree 0.780).
+- Feature extraction dominates: inference is under 0.07% of the instructions per window with
+  15 or fewer features, and at most 1.7% (the MLP on all 7056). Within extraction, the wavelet
+  transform costs most.
+- Flash is set by the model (forest 30 x depth 8: 113 KB; tree: 4 KB), RAM and compute by the
+  features. Every configuration's firmware fits the STM32F407 (all 7056 features only with
+  its 64 KB CCM) and none fits a 32 KB Cortex-M0+; a real device would also need RAM for the
+  raw window (120-140 KB), which does not fit next to it.
+
+More: [accuracy vs flash](results/plots/f1_vs_flash.png),
+[cost split](results/plots/cost_split.png), [board fit](results/plots/boards.png),
+[full table](results/sweep.md).
 
 ## How it fits together
 
@@ -80,6 +100,8 @@ renode-test renode/hello.robot        # headless boot check
 .venv/bin/python python/run_device.py features   # C features on the simulated board, 120 windows
 .venv/bin/python python/run_device.py full   # whole pipeline on the board: features + prediction
 .venv/bin/python python/measure.py --opt -Os # flash, RAM, stack, instructions -> results/measurements.csv
+.venv/bin/python python/sweep.py --workers 4 # all 80 configurations -> results/sweep.csv (~1 h)
+.venv/bin/python python/plots.py             # results/plots/*.png, results/sweep.md
 .venv/bin/python -m pytest python -q         # reference vs pywt / scipy / thesis code
 ```
 
