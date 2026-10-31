@@ -10,9 +10,10 @@ built on DFT, Stockwell and wavelet transforms, for locating an HIF in one of fo
 adapted IEEE 34-node feeder. This project asks what those features cost on a device, compared with
 using all of them or random subsets of the same size.
 
-> **Status: work in progress.** Done: toolchain, bare-metal firmware running in Renode, and a
-> Python reference that reproduces the thesis's features exactly. Next: model conversion, C
-> feature extraction with CMSIS-DSP, on-device benchmarking.
+> **Status: work in progress.** Done: toolchain, bare-metal firmware running in Renode, a Python
+> reference that reproduces the thesis's features exactly, and four models converted to C that
+> agree 100% with scikit-learn on the simulated board. Next: C feature extraction with
+> CMSIS-DSP, on-device benchmarking.
 
 ## How it fits together
 
@@ -70,6 +71,8 @@ renode-test renode/hello.robot        # headless boot check
 .venv/bin/python python/export_windows.py    # raw test windows + parity check vs the thesis
 .venv/bin/python python/select_train.py      # thesis selection re-run on the training split
 .venv/bin/python python/baseline.py          # models x feature sets on the test split
+.venv/bin/python python/convert.py --model forest   # train + firmware/include/model.h + host check
+.venv/bin/python python/run_device.py model  # that model on the simulated board, all test rows
 .venv/bin/python -m pytest python -q         # reference vs pywt / scipy / thesis code
 ```
 

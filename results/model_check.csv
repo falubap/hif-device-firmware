@@ -1,0 +1,5 @@
+description,n,agreement,acc,f1_macro,flash_bytes_incl_features
+"logreg (C=1, balanced) on thesis_train (15 features), SNR 40 dB",1645,1.0000,0.6839,0.6804,103800
+"tree (depth 8, inline) on thesis_train (15 features), SNR 40 dB",1645,1.0000,0.7526,0.7407,106228
+"forest (30 trees, depth 8, inline, soft voting) on thesis_train (15 features), SNR 40 dB",1645,1.0000,0.7933,0.7812,218428
+"mlp (16 hidden units) on thesis_train (15 features), SNR 40 dB",1645,1.0000,0.7179,0.6894,107752

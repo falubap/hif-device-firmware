@@ -6,7 +6,7 @@ Test set: 1645 files from 7 held-out soils. Random rows: mean over draws; f1_p95
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | forest | all | 7056 | 0.771 | 0.754 | | |
 | forest | thesis_train | 15 | 0.793 | 0.781 | | |
-| forest | thesis_published | 15 | 0.765 | 0.754 | | |
+| forest | thesis_published | 15 | 0.766 | 0.755 | | |
 | forest | random | 15 | 0.472 | 0.468 | 0.068 | 0.564 |
 | logreg | all | 7056 | 0.674 | 0.653 | | |
 | logreg | thesis_train | 15 | 0.684 | 0.680 | | |
@@ -16,7 +16,7 @@ Test set: 1645 files from 7 held-out soils. Random rows: mean over draws; f1_p95
 | mlp | thesis_train | 15 | 0.718 | 0.689 | | |
 | mlp | thesis_published | 15 | 0.762 | 0.737 | | |
 | mlp | random | 15 | 0.443 | 0.412 | 0.060 | 0.503 |
-| tree | all | 7056 | 0.796 | 0.784 | | |
-| tree | thesis_train | 15 | 0.752 | 0.740 | | |
-| tree | thesis_published | 15 | 0.712 | 0.707 | | |
+| tree | all | 7056 | 0.793 | 0.780 | | |
+| tree | thesis_train | 15 | 0.753 | 0.741 | | |
+| tree | thesis_published | 15 | 0.711 | 0.706 | | |
 | tree | random | 15 | 0.438 | 0.432 | 0.070 | 0.538 |
