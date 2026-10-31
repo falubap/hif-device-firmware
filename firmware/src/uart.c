@@ -53,3 +53,16 @@ void uart_puts(const char *s)
     while (*s)
         uart_putc(*s++);
 }
+
+/* Unsigned decimal, without printf (newlib's pulls in malloc and ~20 KB). */
+void uart_putu(uint32_t v)
+{
+    char buf[10];
+    int n = 0;
+    do {
+        buf[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    while (n)
+        uart_putc(buf[--n]);
+}
