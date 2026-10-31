@@ -1,0 +1,4 @@
+description,windows,features,values_ok,worst_over_tol,gate4
+"host, forest (30 trees, depth 8, inline, soft voting) on thesis_train (15 features), SNR 40 dB",1645,15,24675/24675,0.1509,PASS
+"device, forest (30 trees, depth 8, inline, soft voting) on thesis_train (15 features), SNR 40 dB",120,15,1800/1800,0.1153,PASS
+"host, all 7056 features",1645,7056,11605774/11607120,12.4992,FAIL

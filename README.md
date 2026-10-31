@@ -11,9 +11,10 @@ adapted IEEE 34-node feeder. This project asks what those features cost on a dev
 using all of them or random subsets of the same size.
 
 > **Status: work in progress.** Done: toolchain, bare-metal firmware running in Renode, a Python
-> reference that reproduces the thesis's features exactly, and four models converted to C that
-> agree 100% with scikit-learn on the simulated board. Next: C feature extraction with
-> CMSIS-DSP, on-device benchmarking.
+> reference that reproduces the thesis's features exactly, four models converted to C that agree
+> 100% with scikit-learn on the simulated board, and C feature extraction (DFT, Stockwell,
+> wavelet on CMSIS-DSP) matching the reference on every test window. Next: full on-device
+> pipeline and benchmarking.
 
 ## How it fits together
 
@@ -73,6 +74,8 @@ renode-test renode/hello.robot        # headless boot check
 .venv/bin/python python/baseline.py          # models x feature sets on the test split
 .venv/bin/python python/convert.py --model forest   # train + firmware/include/model.h + host check
 .venv/bin/python python/run_device.py model  # that model on the simulated board, all test rows
+.venv/bin/python python/run_device.py host   # C features (PC build) vs python, all test windows
+.venv/bin/python python/run_device.py features   # C features on the simulated board, 120 windows
 .venv/bin/python -m pytest python -q         # reference vs pywt / scipy / thesis code
 ```
 
@@ -85,5 +88,8 @@ renode-test renode/hello.robot        # headless boot check
   it is re-run here, with the same code and configuration, on the training soils alone.
 - **Reference parity:** `python/features.py` reproduces the thesis's 7056 features to float32
   rounding (max relative error 6.9e-8) on all 1645 test simulations.
+- **Feature extraction in C:** CMSIS-DSP only offers power-of-two FFTs, so the 2560-sample
+  (10-cycle) transforms are built from ten 256-point FFTs, and the Stockwell voices are reduced
+  to a closed form that needs no inverse FFT (`python/fast.py` is its numpy twin).
 - **Instruction counts are not time:** Renode is a functional simulator. Counts compare
   configurations; they ignore pipeline stalls, flash wait states and memory latency.
