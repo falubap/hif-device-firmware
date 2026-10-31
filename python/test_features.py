@@ -108,3 +108,32 @@ def test_negative_sequence_is_zero_for_a_balanced_positive_sequence():
         order = "d6" if transform == "wavelet" else "h1"
         fid = f"{transform}.negative_sequence_voltage.{order}.module.mean"
         assert abs(F.extract(x, 0, [fid])[0]) < 1e-6, fid
+
+
+# --------------------------------------------------------------------------- python/fast.py
+# The algorithms the firmware uses must equal the definitions above (to float64 rounding).
+
+import fast  # noqa: E402
+
+
+def test_dft2560_from_decimated_ffts():
+    x = harmonic_signal(4)
+    assert np.allclose(fast.dft2560(x, F.N // 2), np.fft.fft(x)[: F.N // 2 + 1], rtol=0, atol=1e-9)
+
+
+def test_irfft2560_inverts_the_dft():
+    x = harmonic_signal(5)
+    assert np.allclose(fast.irfft2560(np.fft.fft(x)[: F.N // 2 + 1]), x, rtol=0, atol=1e-12)
+
+
+def test_fast_hilbert_rotation_matches_definition():
+    x = harmonic_signal(6)
+    assert np.allclose(fast.hilbert_rotate(x, 2.0), F.hilbert_rotate(x, 2.0), rtol=0, atol=1e-12)
+
+
+def test_fast_stockwell_matches_definition():
+    """Truncating the voice sum at |m| <= 1.5 k0 drops a Gaussian tail below e^-44."""
+    for seed in (7, 8):
+        x = harmonic_signal(seed)
+        want = F.stockwell(x)
+        assert np.allclose(fast.stockwell(x), want, rtol=1e-11, atol=1e-14 * np.abs(want).max())

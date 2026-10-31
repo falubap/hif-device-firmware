@@ -66,3 +66,11 @@ void uart_putu(uint32_t v)
     while (n)
         uart_putc(buf[--n]);
 }
+
+/* 8 lowercase hex digits: floats are printed as their bit pattern, so the host reads them back
+ * exactly. */
+void uart_puthex(uint32_t v)
+{
+    for (int shift = 28; shift >= 0; shift -= 4)
+        uart_putc("0123456789abcdef"[(v >> shift) & 0xF]);
+}
