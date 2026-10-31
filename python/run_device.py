@@ -3,6 +3,7 @@
     .venv/bin/python python/run_device.py model     # Step 3: model on all test rows' features
     .venv/bin/python python/run_device.py host      # Step 4: C features on the PC, all test windows
     .venv/bin/python python/run_device.py features  # Step 4: C features on the device, 120 windows
+    .venv/bin/python python/run_device.py full      # Step 5: raw window -> features -> model
 
 Predictions are compared with scikit-learn (agreement, device accuracy / macro-F1). Features are
 compared with features.extract on the same float32 windows (data/test_windows), using the
@@ -163,24 +164,99 @@ def check_host(all_features: bool = False) -> None:
         **report_parity.last})
 
 
-def check_features(batch_list: list[int]) -> None:
-    """C extractor on the device, over the device set, one firmware build per batch."""
+FLASH_BYTES = 1024 * 1024
+#: Flash one more raw window costs: 2 x 7 x 2560 float32, plus its features and small metadata.
+WINDOW_BYTES = 2 * 7 * 2560 * 4 + 64 * 4 + 8
+
+
+def fit_per_batch(mode: str) -> int:
+    """How many raw windows fit next to this configuration's code: build with one, then fill."""
+    export_vectors.export_batch(0, per_batch=1)
+    build(mode)
+    spare = FLASH_BYTES - elf_flash_bytes() - 1024          # keep 1 KB of headroom
+    return max(1, 1 + spare // WINDOW_BYTES)
+
+
+def batch_list(spec: str, n: int) -> list[int]:
+    if spec == "all":
+        return list(range(n))
+    if "-" in spec:
+        lo, hi = map(int, spec.split("-"))
+        return list(range(lo, hi + 1))
+    return [int(spec)]
+
+
+def run_batches(mode: str, spec: str = "all") -> tuple[dict, dict, dict]:
+    """Run the device set through firmware `mode`, one build per batch of raw windows.
+
+    Returns (features by row, device predictions by row, Python references by row)."""
+    per_batch = fit_per_batch(mode)
+    n = export_vectors.batches(per_batch=per_batch)
+    print(f"{per_batch} windows per build, {n} builds", flush=True)
+    feats, preds, refs = {}, {}, {}
+    for b in batch_list(spec, n):
+        out = export_vectors.export_batch(b, per_batch)
+        build(mode)
+        text = run_renode(f"{mode}_{b:02d}.log")
+        f = parse_features(text)
+        rows = out["rows"].tolist()
+        if "DONE" not in text or sorted(f) != sorted(rows):
+            raise SystemExit(f"batch {b}: expected rows {rows}, got {sorted(f)}")
+        feats.update(f)
+        preds.update(parse_predictions(text))
+        for k, r in enumerate(rows):
+            refs[r] = {key: out[key][k] for key in ("labels", "preds", "preds_thesis")}
+        print(f"batch {b:2d}: {len(f)} windows, flash {elf_flash_bytes() / 1024:.0f} KB", flush=True)
+    return feats, preds, refs
+
+
+def check_features(spec: str) -> None:
+    """C extractor on the device, over the device set."""
     ids, ref, spread, _ = feature_reference()
-    got: dict[int, np.ndarray] = {}
-    for b in batch_list:
-        out = export_vectors.export_batch(b)
-        build("features")
-        text = run_renode(f"features_{b:02d}.log")
-        batch = parse_features(text)
-        if "DONE" not in text or sorted(batch) != sorted(out["rows"].tolist()):
-            raise SystemExit(f"batch {b}: expected rows {out['rows'].tolist()}, got {sorted(batch)}")
-        got.update(batch)
-        print(f"batch {b:2d}: {len(batch)} windows, flash {elf_flash_bytes() / 1024:.0f} KB", flush=True)
+    got, _, _ = run_batches("features", spec)
     rows = np.array(sorted(got))
     report_parity(ids, rows, np.array([got[r] for r in rows], dtype=np.float64), ref[rows], spread)
     cfg = json.loads((paths.DATA / "model.json").read_text())
     record(paths.RESULTS / "feature_check.csv", {
         "description": f"device, {cfg['description']}", **report_parity.last})
+
+
+def check_full(spec: str) -> None:
+    """Step 5: the whole pipeline on the device. Gate 5: >= 99% agreement with scikit-learn."""
+    ids, ref, spread, _ = feature_reference()
+    feats, preds, refs = run_batches("full", spec)
+    rows = np.array(sorted(preds))
+    dev = np.array([preds[r] for r in rows])
+    py = np.array([refs[r]["preds"] for r in rows])
+    thesis = np.array([refs[r]["preds_thesis"] for r in rows])
+    y = np.array([refs[r]["labels"] for r in rows])
+    got = np.array([feats[r] for r in rows], dtype=np.float64)
+
+    report_parity(ids, rows, got, ref[rows], spread)
+    agree = float((dev == py).mean())
+    print(f"\npredictions on {len(rows)} raw windows:")
+    print(f"  agreement with scikit-learn on the same float32 windows: {agree:.4f} "
+          f"({int((dev != py).sum())} differ)")
+    print(f"  agreement with scikit-learn on the thesis's features:     {(dev == thesis).mean():.4f}")
+    acc, f1 = accuracy_score(y, dev), f1_score(y, dev, average="macro")
+    print(f"  device acc {acc:.4f}  macro-F1 {f1:.4f}   "
+          f"(python on the same windows: acc {accuracy_score(y, py):.4f}  "
+          f"macro-F1 {f1_score(y, py, average='macro'):.4f})")
+    for k in np.flatnonzero(dev != py):
+        # Which features moved most, in units of their tolerance.
+        d = np.abs(got[k] - ref[rows[k]]) / (1e-3 * np.abs(ref[rows[k]]) + 1e-3 * spread)
+        top = np.argsort(-d)[:3]
+        print(f"  row {rows[k]}: device {dev[k]}, python {py[k]}; largest feature errors: "
+              + ", ".join(f"{ids[j]} ({d[j]:.2f} tol)" for j in top))
+    passed = agree >= 0.99
+    print(f"Gate 5: {'PASS' if passed else 'FAIL'}")
+    cfg = json.loads((paths.DATA / "model.json").read_text())
+    record(paths.RESULTS / "pipeline_check.csv", {
+        "description": cfg["description"], "windows": len(rows), "agreement": agree,
+        "agreement_thesis_features": float((dev == thesis).mean()),
+        "device_acc": acc, "device_f1_macro": f1, "features_ok": report_parity.last["values_ok"],
+        "gate5": "PASS" if passed else "FAIL",
+    })
 
 
 def elf_flash_bytes() -> int:
@@ -201,7 +277,7 @@ def record(path, row: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("what", choices=["model", "host", "features"])
+    parser.add_argument("what", choices=["model", "host", "features", "full"])
     parser.add_argument("--all-features", action="store_true",
                         help="host: check all 7056 features, not just the model's")
     parser.add_argument("--batches", default="all", help="device batches, e.g. 0 or 0-4 (default all)")
@@ -210,16 +286,10 @@ def main() -> None:
         check_model()
     elif args.what == "host":
         check_host(all_features=args.all_features)
+    elif args.what == "features":
+        check_features(args.batches)
     else:
-        n = export_vectors.batches()
-        if args.batches == "all":
-            batch_list = list(range(n))
-        elif "-" in args.batches:
-            lo, hi = map(int, args.batches.split("-"))
-            batch_list = list(range(lo, hi + 1))
-        else:
-            batch_list = [int(args.batches)]
-        check_features(batch_list)
+        check_full(args.batches)
 
 
 if __name__ == "__main__":

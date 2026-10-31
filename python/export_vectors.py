@@ -118,10 +118,14 @@ def export_batch(batch: int, per_batch: int = PER_BATCH) -> dict:
     rows = rows_all[batch * per_batch : (batch + 1) * per_batch]
     ref = w["feat_f32in"][rows][:, cols].astype(np.float32)
     preds = pipe.predict(ref)
+    thesis = np.load(paths.FEATURES, allow_pickle=True)["X_test"][rows][:, cols]
     write_header(rows, w["y"][rows], w["phase"][rows], ref, preds, x=w["x"][rows],
                  note=f"{cfg['description']}; batch {batch} of {n_batches} "
                       f"({len(rows)} of {len(rows_all)} device vectors)")
-    return {"rows": rows, "labels": w["y"][rows], "preds": preds, "features": ref}
+    # preds: scikit-learn on features.py of the same float32 window (the device's reference);
+    # preds_thesis: scikit-learn on the thesis's own features (float64 windows).
+    return {"rows": rows, "labels": w["y"][rows], "preds": preds,
+            "preds_thesis": pipe.predict(thesis), "features": ref}
 
 
 def main() -> None:
