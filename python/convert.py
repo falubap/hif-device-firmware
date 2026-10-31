@@ -6,8 +6,8 @@
 model.h exposes one entry point, `int hif_model_predict(const float *features)`, that returns the
 region (1..4) for the features in HIF_FEATURE_IDS order. It contains, in order:
   - the preprocessing (signed log1p + standardisation) for logreg and mlp;
-  - the estimator: emlearn's code for tree / forest / mlp, hand-written for logreg (emlearn has no
-    converter for it).
+  - the estimator: emlearn's code for tree / forest; generated weights with a hand-written forward
+    pass for logreg (emlearn has no converter) and mlp (see mlp_code).
 
 Gate 3: the exact header is compiled for the host (firmware/test/host_model.c) and its predictions
 are compared with scikit-learn on the whole test split. Also writes data/model.json (the config,
@@ -32,10 +32,15 @@ import feature_config
 import models
 import paths
 
+# Importing emlearn runs numpy.seterr(all="raise") (emlearn/bayes.py), which turns a harmless
+# underflow inside scikit-learn's logistic-regression fit (7056 features) into an exception.
+# Back to numpy's defaults.
+np.seterr(divide="warn", over="warn", under="ignore", invalid="warn")
+
 HEADER = paths.FIRMWARE_INCLUDE / "model.h"
-CONFIG = paths.DATA / "model.json"
-HOST_SRC = paths.REPO / "firmware" / "test" / "host_model.c"
-HOST_BIN = paths.REPO / "firmware" / "build" / "host" / "host_model"
+CONFIG = paths.WORK / "model.json"
+HOST_SRC = paths.FIRMWARE / "test" / "host_model.c"
+HOST_BIN = paths.FIRMWARE / "build" / "host" / "host_model"
 
 
 def c_float(value) -> str:
@@ -57,14 +62,24 @@ def c_array(name: str, values, ctype: str = "float") -> str:
     return f"static const {ctype} {name}[{len(values)}] = {{\n    {body}\n}};\n"
 
 
-def feature_set(name: str) -> list[str]:
-    if name == "thesis_train":
+RANDOM_SIZE = 15
+
+
+def feature_set(name: str, names: list[str]) -> list[str]:
+    """thesis_train | thesis_published | all | top:<k> (first k of thesis_train's ranking) |
+    random:<d> (draw d of RANDOM_SIZE features, uniformly over all 7056, fixed seed per draw)."""
+    if name in ("thesis_train",) or name.startswith("top:"):
         ids = models.thesis_train_top15()
         if ids is None:
             raise SystemExit("results/selection_train.json missing; run python/select_train.py")
-        return ids
+        return ids if name == "thesis_train" else ids[: int(name.split(":")[1])]
     if name == "thesis_published":
         return models.thesis_published_top15()
+    if name == "all":
+        return list(names)
+    if name.startswith("random:"):
+        rng = np.random.default_rng(1000 + int(name.split(":")[1]))
+        return [names[i] for i in sorted(rng.choice(len(names), RANDOM_SIZE, replace=False))]
     raise SystemExit(f"unknown feature set {name!r}")
 
 
@@ -95,10 +110,71 @@ static inline int32_t hif_est_predict(const float *x, int32_t n)
 }}
 """
         )
-    kwargs = {"dtype": "float", "leaf_bits": 8} if kind in ("tree", "forest") else {}
+    if kind == "mlp":
+        return mlp_code(est)
     # emlearn test-compiles some models into ./tmp; keep that out of the repo.
     with tempfile.TemporaryDirectory() as scratch, contextlib.chdir(scratch):
-        return emlearn.convert(est, method=method, **kwargs).save(name="hif_est")
+        return emlearn.convert(est, method=method, dtype="float", leaf_bits=8).save(name="hif_est")
+
+
+def mlp_code(est) -> str:
+    """Dense forward pass for an MLPClassifier: ReLU hidden layers, argmax of the output logits
+    (softmax is monotone, so it picks what scikit-learn's predict picks).
+
+    Hand-written rather than emlearn's: eml_net_infer requires both activation buffers to be as
+    wide as the widest layer INCLUDING the input, i.e. 2 x 7056 floats (55 KB) for the
+    all-features set, which does not fit next to the extractor in 128 KB. Here the buffers are as
+    wide as the widest hidden/output layer.
+    """
+    if est.activation != "relu":
+        raise SystemExit(f"MLP activation {est.activation!r} not supported")
+    sizes = [est.coefs_[0].shape[0]] + [w.shape[1] for w in est.coefs_]
+    width = max(sizes[1:])
+    parts = []
+    for i, (w, b) in enumerate(zip(est.coefs_, est.intercepts_)):
+        # Stored output-major, w_t[o][i], so each output is one contiguous dot product.
+        parts.append(c_array(f"hif_mlp_w{i}", w.T) + c_array(f"hif_mlp_b{i}", b))
+    layers = ",\n    ".join(
+        f"{{{sizes[i]}, {sizes[i + 1]}, hif_mlp_w{i}, hif_mlp_b{i}}}" for i in range(len(est.coefs_)))
+    return "".join(parts) + f"""
+typedef struct {{
+    int32_t n_in, n_out;
+    const float *w;   /* [n_out][n_in] */
+    const float *b;
+}} hif_mlp_layer_t;
+
+static const hif_mlp_layer_t hif_mlp_layers[{len(est.coefs_)}] = {{
+    {layers}
+}};
+
+/* Forward pass: ReLU on hidden layers, identity on the output; returns the argmax class index
+ * (the first maximum wins, as numpy's argmax). */
+static inline int32_t hif_est_predict(const float *x, int32_t n)
+{{
+    static float act[2][{width}];
+    (void)n;
+    const float *in = x;
+    int32_t n_layers = {len(est.coefs_)}, buf = 0;
+    for (int32_t l = 0; l < n_layers; l++) {{
+        const hif_mlp_layer_t *L = &hif_mlp_layers[l];
+        float *out = act[buf];
+        for (int32_t o = 0; o < L->n_out; o++) {{
+            const float *w = L->w + o * L->n_in;
+            float s = L->b[o];
+            for (int32_t i = 0; i < L->n_in; i++)
+                s += w[i] * in[i];
+            out[o] = (l < n_layers - 1 && s < 0.0f) ? 0.0f : s;
+        }}
+        in = out;
+        buf ^= 1;
+    }}
+    int32_t best = 0;
+    for (int32_t c = 1; c < hif_mlp_layers[n_layers - 1].n_out; c++)
+        if (in[c] > in[best])
+            best = c;
+    return best;
+}}
+"""
 
 
 def write_header(kind: str, pipe, ids: list[str], description: str, method: str) -> None:
@@ -129,10 +205,10 @@ def write_header(kind: str, pipe, ids: list[str], description: str, method: str)
     lines += [estimator_code(kind, est, method), ""]
 
     if preprocess:
-        lines.append("""/* Signed log1p, then standardisation (python/models.py), into a static buffer. */
+        lines.append("""/* Signed log1p, then standardisation (python/models.py), into a static buffer in the CCM. */
 static inline int hif_model_predict(const float *features)
 {
-    static float x[HIF_N_FEATURES];
+    static float x[HIF_N_FEATURES] __attribute__((section(".ccmram")));
     for (int i = 0; i < HIF_N_FEATURES; i++) {
         float v = log1pf(fabsf(features[i]));
         v = features[i] < 0.0f ? -v : v;
@@ -166,46 +242,60 @@ def host_predict(X: np.ndarray) -> np.ndarray:
     return np.array(out.stdout.split(), dtype=int)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=models.MODELS, required=True)
-    parser.add_argument("--features", default="thesis_train")
-    parser.add_argument("--trees", type=int, default=30)
-    parser.add_argument("--depth", type=int, default=8)
-    parser.add_argument("--hidden", type=int, default=16)
-    parser.add_argument("--method", choices=("inline", "loadable"), default="inline")
-    args = parser.parse_args()
-
+def convert(model: str, features: str = "thesis_train", trees: int = 30, depth: int = 8,
+            hidden: int = 16, method: str = "inline") -> dict:
+    """Train, write model.h + feature_config.h + model.json/joblib, check C vs scikit-learn on the
+    host (Gate 3). Returns Python's and the host C model's scores on the whole test split."""
     names, Xtr, ytr, Xte, yte = models.load_split()
-    ids = feature_set(args.features)
+    ids = feature_set(features, names)
     cols = [names.index(f) for f in ids]
-    pipe = models.make_model(args.model, n_trees=args.trees, depth=args.depth,
-                             hidden=args.hidden).fit(Xtr[:, cols], ytr)
+    pipe = models.make_model(model, n_trees=trees, depth=depth, hidden=hidden).fit(Xtr[:, cols], ytr)
 
-    hyper = {"tree": f"depth {args.depth}, {args.method}",
-             "forest": f"{args.trees} trees, depth {args.depth}, {args.method}, soft voting",
-             "mlp": f"{args.hidden} hidden units", "logreg": "C=1, balanced"}[args.model]
-    description = f"{args.model} ({hyper}) on {args.features} ({len(ids)} features), SNR {paths.SNR} dB"
-    write_header(args.model, pipe, ids, description, args.method)
+    hyper = {"tree": f"depth {depth}, {method}",
+             "forest": f"{trees} trees, depth {depth}, {method}, soft voting",
+             "mlp": f"{hidden} hidden units", "logreg": "C=1, balanced"}[model]
+    description = f"{model} ({hyper}) on {features} ({len(ids)} features), SNR {paths.SNR} dB"
+    write_header(model, pipe, ids, description, method)
     feature_config.write(ids, description)
 
     X = Xte[:, cols].astype(np.float32)
     py = pipe.predict(X)
     c = host_predict(X)
     agree = float((c == py).mean())
+    result = {
+        "description": description,
+        "py_acc": accuracy_score(yte, py), "py_f1": f1_score(yte, py, average="macro"),
+        "host_acc": accuracy_score(yte, c), "host_f1": f1_score(yte, c, average="macro"),
+        "agreement_host": agree,
+    }
     print(description)
-    print(f"  python  acc {accuracy_score(yte, py):.4f}  macro-F1 {f1_score(yte, py, average='macro'):.4f}")
-    print(f"  C/host  acc {accuracy_score(yte, c):.4f}  macro-F1 {f1_score(yte, c, average='macro'):.4f}")
+    print(f"  python  acc {result['py_acc']:.4f}  macro-F1 {result['py_f1']:.4f}")
+    print(f"  C/host  acc {result['host_acc']:.4f}  macro-F1 {result['host_f1']:.4f}")
     print(f"  agreement C vs python: {agree:.4f} ({int((c != py).sum())} of {len(c)} differ)"
           f"  -> Gate 3 {'PASS' if agree > 0.99 else 'FAIL'}")
 
+    paths.WORK.mkdir(parents=True, exist_ok=True)
     CONFIG.write_text(json.dumps({
-        "model": args.model, "features": args.features, "feature_ids": ids,
-        "trees": args.trees, "depth": args.depth, "hidden": args.hidden, "method": args.method,
+        "model": model, "features": features, "feature_ids": ids,
+        "trees": trees, "depth": depth, "hidden": hidden, "method": method,
         "description": description, "classes": pipe[-1].classes_.tolist(),
         "agreement_host": agree,
     }, indent=1))
-    joblib.dump(pipe, paths.DATA / "model.joblib")
+    joblib.dump(pipe, paths.WORK / "model.joblib")
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", choices=models.MODELS, required=True)
+    parser.add_argument("--features", default="thesis_train",
+                        help="thesis_train | thesis_published | all | top:<k> | random:<d>")
+    parser.add_argument("--trees", type=int, default=30)
+    parser.add_argument("--depth", type=int, default=8)
+    parser.add_argument("--hidden", type=int, default=16)
+    parser.add_argument("--method", choices=("inline", "loadable"), default="inline")
+    args = parser.parse_args()
+    convert(args.model, args.features, args.trees, args.depth, args.hidden, args.method)
 
 
 if __name__ == "__main__":

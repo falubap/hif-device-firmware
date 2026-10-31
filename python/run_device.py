@@ -26,13 +26,15 @@ import feature_config
 import features
 import paths
 
-FIRMWARE = paths.REPO / "firmware"
+FIRMWARE = paths.FIRMWARE
 ELF = FIRMWARE / "build" / "hif.elf"
-RUN_DIR = paths.DATA / "renode"
+RUN_DIR = paths.WORK / "renode"
 
 
 def build(mode: str, opt: str = "-Os") -> None:
-    subprocess.run(["make", "-s", "-C", str(FIRMWARE), f"MODE={mode}", f"OPT={opt}"], check=True)
+    import emlearn
+    subprocess.run(["make", "-s", "-C", str(FIRMWARE), f"MODE={mode}", f"OPT={opt}",
+                    f"EMLEARN_INC={emlearn.includedir}"], check=True, stdout=subprocess.DEVNULL)
 
 
 def run_renode(log_name: str, robot: str = "run.robot", extra: dict | None = None) -> str:
@@ -41,7 +43,8 @@ def run_renode(log_name: str, robot: str = "run.robot", extra: dict | None = Non
     log = RUN_DIR / log_name
     log.unlink(missing_ok=True)
     result = subprocess.run(
-        ["renode-test", str(paths.REPO / "renode" / robot),
+        # -P 0: Renode's robot server takes any free port, so several runs can go in parallel.
+        ["renode-test", "-P", "0", str(paths.REPO / "renode" / robot),
          "--variable", f"ELF:{ELF}", "--variable", f"UART_LOG:{log}",
          *(a for k, v in (extra or {}).items() for a in ("--variable", f"{k}:{v}"))],
         cwd=RUN_DIR, capture_output=True, text=True,
@@ -70,7 +73,7 @@ def check_model() -> None:
     f1 = f1_score(ref["labels"], pred, average="macro")
     print(f"  device acc {acc:.4f}  macro-F1 {f1:.4f}")
     record(paths.RESULTS / "model_check.csv", {
-        "description": json.loads((paths.DATA / "model.json").read_text())["description"],
+        "description": json.loads((paths.WORK / "model.json").read_text())["description"],
         "n": len(pred), "agreement": agree, "acc": acc, "f1_macro": f1,
         "flash_bytes_incl_features": elf_flash_bytes(),
     })
@@ -87,7 +90,7 @@ def parse_features(text: str) -> dict[int, np.ndarray]:
 
 def feature_reference():
     """Feature ids, Python reference on every test window (float32 input) and per-feature spread."""
-    cfg = json.loads((paths.DATA / "model.json").read_text())
+    cfg = json.loads((paths.WORK / "model.json").read_text())
     w = np.load(paths.TEST_WINDOWS, allow_pickle=True)
     col = {n: i for i, n in enumerate(w["names"].tolist())}
     ref = w["feat_f32in"][:, [col[f] for f in cfg["feature_ids"]]]
@@ -151,7 +154,7 @@ def check_host(all_features: bool = False) -> None:
                              capture_output=True, check=True).stdout.decode()
     finally:
         if all_features:
-            cfg = json.loads((paths.DATA / "model.json").read_text())
+            cfg = json.loads((paths.WORK / "model.json").read_text())
             feature_config.write(cfg["feature_ids"], cfg["description"])
     got = parse_features(out)
     rows = np.arange(len(head))
@@ -159,23 +162,30 @@ def check_host(all_features: bool = False) -> None:
     if all_features:
         np.save(paths.DATA / "host_features_all.npy", got.astype(np.float32))
     report_parity(ids, rows, got, ref[rows], spread, summary_only=all_features)
-    cfg = json.loads((paths.DATA / "model.json").read_text())
+    cfg = json.loads((paths.WORK / "model.json").read_text())
     record(paths.RESULTS / "feature_check.csv", {
         "description": "host, all 7056 features" if all_features else f"host, {cfg['description']}",
         **report_parity.last})
 
 
 FLASH_BYTES = 1024 * 1024
-#: Flash one more raw window costs: 2 x 7 x 2560 float32, plus its features and small metadata.
-WINDOW_BYTES = 2 * 7 * 2560 * 4 + 64 * 4 + 8
 
 
-def fit_per_batch(mode: str) -> int:
+def window_bytes(n_features: int) -> int:
+    """Flash one more raw window costs: 2 x 7 x 2560 float32, its reference features, metadata."""
+    return 2 * 7 * 2560 * 4 + 4 * n_features + 8
+
+
+def n_features() -> int:
+    return len(json.loads((paths.WORK / "model.json").read_text())["feature_ids"])
+
+
+def fit_per_batch(mode: str, opt: str = "-Os") -> int:
     """How many raw windows fit next to this configuration's code: build with one, then fill."""
     export_vectors.export_batch(0, per_batch=1)
-    build(mode)
+    build(mode, opt)
     spare = FLASH_BYTES - elf_flash_bytes() - 1024          # keep 1 KB of headroom
-    return max(1, 1 + spare // WINDOW_BYTES)
+    return max(1, 1 + spare // window_bytes(n_features()))
 
 
 def batch_list(spec: str, n: int) -> list[int]:
@@ -187,17 +197,17 @@ def batch_list(spec: str, n: int) -> list[int]:
     return [int(spec)]
 
 
-def run_batches(mode: str, spec: str = "all") -> tuple[dict, dict, dict]:
+def run_batches(mode: str, spec: str = "all", opt: str = "-Os") -> tuple[dict, dict, dict]:
     """Run the device set through firmware `mode`, one build per batch of raw windows.
 
     Returns (features by row, device predictions by row, Python references by row)."""
-    per_batch = fit_per_batch(mode)
+    per_batch = fit_per_batch(mode, opt)
     n = export_vectors.batches(per_batch=per_batch)
     print(f"{per_batch} windows per build, {n} builds", flush=True)
     feats, preds, refs = {}, {}, {}
     for b in batch_list(spec, n):
         out = export_vectors.export_batch(b, per_batch)
-        build(mode)
+        build(mode, opt)
         text = run_renode(f"{mode}_{b:02d}.log")
         f = parse_features(text)
         rows = out["rows"].tolist()
@@ -217,15 +227,16 @@ def check_features(spec: str) -> None:
     got, _, _ = run_batches("features", spec)
     rows = np.array(sorted(got))
     report_parity(ids, rows, np.array([got[r] for r in rows], dtype=np.float64), ref[rows], spread)
-    cfg = json.loads((paths.DATA / "model.json").read_text())
+    cfg = json.loads((paths.WORK / "model.json").read_text())
     record(paths.RESULTS / "feature_check.csv", {
         "description": f"device, {cfg['description']}", **report_parity.last})
 
 
-def check_full(spec: str) -> None:
-    """Step 5: the whole pipeline on the device. Gate 5: >= 99% agreement with scikit-learn."""
+def check_full(spec: str = "all", opt: str = "-Os", save: bool = True) -> dict:
+    """Step 5: the whole pipeline on the device. Gate 5: >= 99% agreement with scikit-learn.
+    Returns the result; save=False leaves results/pipeline_check.csv alone (the sweep)."""
     ids, ref, spread, _ = feature_reference()
-    feats, preds, refs = run_batches("full", spec)
+    feats, preds, refs = run_batches("full", spec, opt)
     rows = np.array(sorted(preds))
     dev = np.array([preds[r] for r in rows])
     py = np.array([refs[r]["preds"] for r in rows])
@@ -233,7 +244,7 @@ def check_full(spec: str) -> None:
     y = np.array([refs[r]["labels"] for r in rows])
     got = np.array([feats[r] for r in rows], dtype=np.float64)
 
-    report_parity(ids, rows, got, ref[rows], spread)
+    report_parity(ids, rows, got, ref[rows], spread, summary_only=len(ids) > 30)
     agree = float((dev == py).mean())
     print(f"\npredictions on {len(rows)} raw windows:")
     print(f"  agreement with scikit-learn on the same float32 windows: {agree:.4f} "
@@ -251,13 +262,18 @@ def check_full(spec: str) -> None:
               + ", ".join(f"{ids[j]} ({d[j]:.2f} tol)" for j in top))
     passed = agree >= 0.99
     print(f"Gate 5: {'PASS' if passed else 'FAIL'}")
-    cfg = json.loads((paths.DATA / "model.json").read_text())
-    record(paths.RESULTS / "pipeline_check.csv", {
+    cfg = json.loads((paths.WORK / "model.json").read_text())
+    result = {
         "description": cfg["description"], "windows": len(rows), "agreement": agree,
         "agreement_thesis_features": float((dev == thesis).mean()),
         "device_acc": acc, "device_f1_macro": f1, "features_ok": report_parity.last["values_ok"],
+        "features_worst_over_tol": report_parity.last["worst_over_tol"],
         "gate5": "PASS" if passed else "FAIL",
-    })
+    }
+    if save:
+        record(paths.RESULTS / "pipeline_check.csv",
+               {k: v for k, v in result.items() if k != "features_worst_over_tol"})
+    return result
 
 
 def elf_flash_bytes() -> int:

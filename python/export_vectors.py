@@ -28,6 +28,7 @@ import paths
 
 HEADER = paths.FIRMWARE_INCLUDE / "test_vectors.h"
 DEVICE_VECTORS = 120
+N_TEST = 1645           # rows in the test split
 PER_BATCH = 6
 SEED = 0
 
@@ -101,8 +102,8 @@ def write_header(rows, labels, phases, ref_features, ref_preds, x=None, note="",
 
 
 def _load():
-    cfg = json.loads((paths.DATA / "model.json").read_text())
-    pipe = joblib.load(paths.DATA / "model.joblib")
+    cfg = json.loads((paths.WORK / "model.json").read_text())
+    pipe = joblib.load(paths.WORK / "model.joblib")
     w = np.load(paths.TEST_WINDOWS, allow_pickle=True)
     col = {n: i for i, n in enumerate(w["names"].tolist())}
     return cfg, pipe, w, [col[f] for f in cfg["feature_ids"]]
@@ -139,14 +140,16 @@ def export_batch(batch: int, per_batch: int = PER_BATCH) -> dict:
             "preds_thesis": pipe.predict(thesis), "features": ref}
 
 
-def export_bench(per_batch: int) -> dict:
-    """Step 6 benchmark: the first `per_batch` device windows (raw) for extraction, and every test
-    row's reference features for inference. Returns rows, labels, Python preds for the windows."""
+def export_bench(per_batch: int, n_rows: int = N_TEST) -> dict:
+    """Step 6 benchmark: the first `per_batch` device windows (raw) for extraction, and the
+    reference features of `n_rows` test rows (all of them unless flash is short) for inference.
+    Returns rows, labels, Python preds for the windows."""
     cfg, pipe, w, cols = _load()
     rows = device_rows(w["y"])[:per_batch]
     ref = w["feat_f32in"][rows][:, cols].astype(np.float32)
     preds = pipe.predict(ref)
-    allf = np.load(paths.FEATURES, allow_pickle=True)["X_test"][:, cols].astype(np.float32)
+    pick = np.sort(np.random.default_rng(SEED).choice(N_TEST, n_rows, replace=False))
+    allf = np.load(paths.FEATURES, allow_pickle=True)["X_test"][pick][:, cols].astype(np.float32)
     write_header(rows, w["y"][rows], w["phase"][rows], ref, preds, x=w["x"][rows],
                  bench=(allf, pipe.predict(allf)),
                  note=f"{cfg['description']}; benchmark: {len(rows)} raw windows, "

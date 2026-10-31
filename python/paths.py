@@ -9,7 +9,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 DATA = REPO / "data"
 RESULTS = REPO / "results"
-FIRMWARE_INCLUDE = REPO / "firmware" / "include"
+#: Firmware tree and per-configuration work files (model.json, model.joblib, Renode logs).
+#: The sweep gives each parallel worker its own copy through these two variables.
+FIRMWARE = Path(os.environ.get("HIF_FIRMWARE", REPO / "firmware"))
+FIRMWARE_INCLUDE = FIRMWARE / "include"
+WORK = Path(os.environ.get("HIF_WORK", DATA))
 
 #: The thesis repository (code, feature matrices, raw simulations). Override with HIF_THESIS.
 THESIS = Path(os.environ.get("HIF_THESIS", "/home/pedrofaluba/tcc"))

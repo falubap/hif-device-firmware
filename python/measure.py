@@ -32,14 +32,14 @@ import numpy as np
 
 import export_vectors
 import paths
-from run_device import (FIRMWARE, FLASH_BYTES, RUN_DIR, WINDOW_BYTES, build,
-                        elf_flash_bytes, parse_predictions, record, run_renode)
+from run_device import (FIRMWARE, FLASH_BYTES, RUN_DIR, build, elf_flash_bytes, n_features,
+                        parse_predictions, record, run_renode, window_bytes)
 
 BUILD = FIRMWARE / "build"
 CLOCK_HZ = 168e6
 TEST_DATA = re.compile(r"hif_(tv|bench)_")
 FLASH_SECTIONS = (".isr_vector", ".text", ".ARM.exidx", ".data")
-RAM_SECTIONS = (".data", ".bss")
+RAM_SECTIONS = (".data", ".bss", ".ccmram")
 
 
 def category(section: str, origin: str) -> str:
@@ -61,7 +61,7 @@ def map_breakdown(map_path) -> dict[str, dict[str, int]]:
     """{"flash"|"ram": {category: bytes}} from a GNU ld map file."""
     lines = map_path.read_text().splitlines()
     start = next(i for i, l in enumerate(lines) if l.startswith("Linker script and memory map"))
-    out = {"flash": defaultdict(int), "ram": defaultdict(int)}
+    out = {"flash": defaultdict(int), "ram": defaultdict(int), "ccm": 0}
     output_section = None
     pending = None                          # input section name whose address is on the next line
     entry = re.compile(r"^\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+(\S.*)$")
@@ -86,7 +86,7 @@ def map_breakdown(map_path) -> dict[str, dict[str, int]]:
             if m2:
                 _add(out, output_section, pending, *m2.groups())
             pending = None
-    return {k: dict(v) for k, v in out.items()}
+    return {"flash": dict(out["flash"]), "ram": dict(out["ram"]), "ccm": out["ccm"]}
 
 
 def _add(out, output_section, name, addr, size, origin) -> None:
@@ -98,6 +98,8 @@ def _add(out, output_section, name, addr, size, origin) -> None:
         out["flash"][cat] += size
     if output_section in RAM_SECTIONS:
         out["ram"][cat] += size
+    if output_section == ".ccmram":
+        out["ccm"] += size
 
 
 def ram_symbols(map_path, top: int = 6) -> list[tuple[int, str]]:
@@ -132,17 +134,26 @@ def stack_frames(top: int = 5) -> list[tuple[int, str]]:
     return sorted(frames, reverse=True)[:top]
 
 
-def fit_bench_windows(opt: str) -> int:
-    """Raw windows that fit next to this configuration's code (build with one, then fill)."""
-    export_vectors.export_bench(1)
+def fit_bench(opt: str) -> tuple[int, int]:
+    """(raw windows, inference rows) that fit next to this configuration's code.
+
+    Build with one of each, then give the spare flash to inference rows first (up to every test
+    row: trees cost different amounts per input, so more rows is a better mean) and the rest to
+    windows (extraction is nearly data-independent, so few windows suffice)."""
+    export_vectors.export_bench(1, n_rows=1)
     build("bench", opt)
-    return max(1, 1 + (FLASH_BYTES - elf_flash_bytes() - 1024) // WINDOW_BYTES)
+    spare = FLASH_BYTES - elf_flash_bytes() - 1024
+    nf = n_features()
+    rows = int(min(export_vectors.N_TEST, 1 + max(0, spare - window_bytes(nf)) // (4 * nf + 1)))
+    spare -= (rows - 1) * (4 * nf + 1)
+    return max(1, 1 + spare // window_bytes(nf)), rows
 
 
-def measure(opt: str) -> dict:
-    cfg = json.loads((paths.DATA / "model.json").read_text())
-    k = fit_bench_windows(opt)
-    ref = export_vectors.export_bench(k)
+def measure(opt: str, save: bool = True) -> dict:
+    """Measure the configuration in model.json at `opt`; save=False leaves the CSV alone."""
+    cfg = json.loads((paths.WORK / "model.json").read_text())
+    k, n_rows = fit_bench(opt)
+    ref = export_vectors.export_bench(k, n_rows=n_rows)
     build("bench", opt)
     marks_file = RUN_DIR / "bench_marks.txt"
     marks_file.unlink(missing_ok=True)
@@ -158,8 +169,12 @@ def measure(opt: str) -> dict:
     stack = int(re.search(r"STACK,(\d+)", uart).group(1))
     preds = parse_predictions(uart)
     agree = np.mean([preds[r] == p for r, p in zip(ref["rows"], ref["preds"])])
-    if wrong or agree < 1:
-        raise SystemExit(f"bench build disagrees with Python: {wrong} inferences, "
+    # Same threshold as Gates 3 and 5: the C model may legitimately differ from scikit-learn on
+    # a near-tie (emlearn quantises forest leaf proportions to 8 bits); a broken build does not
+    # get within 1%.
+    bench_agree = 1 - wrong / n_infer
+    if bench_agree < 0.99 or agree < 0.99:
+        raise SystemExit(f"bench build disagrees with Python: {wrong} of {n_infer} inferences, "
                          f"{agree:.3f} window agreement")
 
     br = map_breakdown(BUILD / "hif.map")
@@ -177,19 +192,20 @@ def measure(opt: str) -> dict:
         **{f"flash_{c}_kb": flash.get(c, 0) / 1024 for c in ("extraction", "cmsis", "model", "libc", "app")},
         "ram_kb": sum(ram.values()) / 1024,
         **{f"ram_{c}_kb": ram.get(c, 0) / 1024 for c in ("extraction", "cmsis", "model", "libc", "app")},
+        "ram_ccm_kb": br["ccm"] / 1024,
         "stack_b": stack,
         "input_kb": input_buffer_kb(cfg["feature_ids"]),
         "instr_feat": round(instr_feat), "instr_inf": round(instr_inf),
         **{f"instr_{k}": v for k, v in stages.items()},
         "est_ms_168mhz": (instr_feat + instr_inf) / CLOCK_HZ * 1e3,
-        "bench_windows": n_extract, "bench_rows": n_infer,
+        "bench_windows": n_extract, "bench_rows": n_infer, "bench_agreement": bench_agree,
     }
     print(f"{cfg['description']}  [{opt}]")
     print(f"  flash {row['flash_kb']:.1f} KB  (extraction {row['flash_extraction_kb']:.1f}, "
           f"cmsis {row['flash_cmsis_kb']:.1f}, model {row['flash_model_kb']:.1f}, "
           f"libc {row['flash_libc_kb']:.1f}, app {row['flash_app_kb']:.1f})"
           f"   test data excluded: {br['flash'].get('test_data', 0) / 1024:.0f} KB")
-    print(f"  static RAM {row['ram_kb']:.1f} KB  (extraction {row['ram_extraction_kb']:.1f}, "
+    print(f"  static RAM {row['ram_kb']:.1f} KB, of which CCM {row['ram_ccm_kb']:.1f}  (extraction {row['ram_extraction_kb']:.1f}, "
           f"cmsis {row['ram_cmsis_kb']:.1f}, model {row['ram_model_kb']:.1f}, "
           f"libc {row['ram_libc_kb']:.1f}, app {row['ram_app_kb']:.1f})")
     print("  largest RAM variables: "
@@ -202,8 +218,10 @@ def measure(opt: str) -> dict:
     total = sum(stages.values())
     print("  extraction by stage (one window): "
           + ", ".join(f"{k} {v:,} ({100 * v / total:.0f}%)" for k, v in stages.items()))
-    print(f"  correctness: {n_infer} inferences agree with Python; {len(ref['rows'])} windows agree")
-    record(paths.RESULTS / "measurements.csv", row, key=("description", "opt"))
+    print(f"  correctness: {n_infer - wrong}/{n_infer} inferences agree with Python; "
+          f"{agree:.0%} of {len(ref['rows'])} windows")
+    if save:
+        record(paths.RESULTS / "measurements.csv", row, key=("description", "opt"))
     return row
 
 
