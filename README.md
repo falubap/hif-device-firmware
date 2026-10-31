@@ -13,9 +13,10 @@ using all of them or random subsets of the same size.
 > **Status: work in progress.** Done: toolchain, bare-metal firmware running in Renode, a Python
 > reference that reproduces the thesis's features exactly, four models converted to C that agree
 > 100% with scikit-learn on the simulated board, C feature extraction (DFT, Stockwell,
-> wavelet on CMSIS-DSP) matching the reference on every test window, and the full pipeline
-> (raw window -> features -> model) agreeing 100% with scikit-learn on the simulated board.
-> Next: memory and instruction-count measurements across configurations.
+> wavelet on CMSIS-DSP) matching the reference on every test window, the full pipeline
+> (raw window -> features -> model) agreeing 100% with scikit-learn on the simulated board, and
+> a measurement harness (flash/RAM per module, stack, exact instruction counts). Next: the
+> automated sweep over feature sets, models and compiler settings.
 
 ## How it fits together
 
@@ -78,6 +79,7 @@ renode-test renode/hello.robot        # headless boot check
 .venv/bin/python python/run_device.py host   # C features (PC build) vs python, all test windows
 .venv/bin/python python/run_device.py features   # C features on the simulated board, 120 windows
 .venv/bin/python python/run_device.py full   # whole pipeline on the board: features + prediction
+.venv/bin/python python/measure.py --opt -Os # flash, RAM, stack, instructions -> results/measurements.csv
 .venv/bin/python -m pytest python -q         # reference vs pywt / scipy / thesis code
 ```
 
@@ -93,5 +95,6 @@ renode-test renode/hello.robot        # headless boot check
 - **Feature extraction in C:** CMSIS-DSP only offers power-of-two FFTs, so the 2560-sample
   (10-cycle) transforms are built from ten 256-point FFTs, and the Stockwell voices are reduced
   to a closed form that needs no inverse FFT (`python/fast.py` is its numpy twin).
-- **Instruction counts are not time:** Renode is a functional simulator. Counts compare
-  configurations; they ignore pipeline stalls, flash wait states and memory latency.
+- **Instruction counts are not time:** Renode is a functional simulator. Counts (exact, via a CPU
+  hook) compare configurations; they ignore pipeline stalls, flash wait states and memory
+  latency. See `report/measurement.md`.
