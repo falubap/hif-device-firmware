@@ -10,6 +10,9 @@
 
 #include <stdint.h>
 
+/* Places a large buffer in the 64 KB CCM (linker.ld) instead of the 128 KB main SRAM. */
+#define HIF_CCM __attribute__((section(".ccmram")))
+
 #define HIF_SAMPLES   2560      /* 10 cycles x 256 samples, fs = 15360 Hz */
 #define HIF_RAW       7         /* Va Vb Vc Ia Ib Ic In */
 #define HIF_CYCLES    10

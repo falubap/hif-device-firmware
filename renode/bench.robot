@@ -19,6 +19,8 @@ ${TIMEOUT}     900
 Count Instructions
     Execute Command          mach create
     Execute Command          machine LoadPlatformDescription @platforms/boards/stm32f4_discovery-kit.repl
+    # The F407's 64 KB CCM, which Renode's STM32F4 model lacks.
+    Execute Command          machine LoadPlatformDescriptionFromString "ccm: Memory.MappedMemory @ sysbus 0x10000000 { size: 0x10000 }"
     Execute Command          sysbus LoadELF @${ELF}
     Execute Command          sysbus.usart2 CreateFileBackend @${UART_LOG} true
     ${addr}=                 Execute Command    sysbus GetSymbolAddress "bench_mark"

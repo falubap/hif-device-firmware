@@ -1,4 +1,4 @@
-/* STM32F407VG: 1 MB flash, 128 KB SRAM (+64 KB CCM at 0x10000000, unused). */
+/* STM32F407VG: 1 MB flash, 128 KB SRAM, 64 KB CCM (core-coupled RAM, CPU access only). */
 
 ENTRY(Reset_Handler)
 
@@ -6,6 +6,7 @@ MEMORY
 {
     FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
     RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
+    CCMRAM (rw) : ORIGIN = 0x10000000, LENGTH = 64K
 }
 
 /* The stack grows down from the top of RAM. The link fails if static data
@@ -62,6 +63,15 @@ SECTIONS
      * [_sstack, _estack). */
     _sstack = ALIGN(_ebss, 8);
     ASSERT(_sstack + _min_stack_size <= _estack, "not enough RAM left for the stack")
+
+    /* Large working buffers marked HIF_CCM. Not zero-initialised: they must be written before
+     * they are read. */
+    .ccmram (NOLOAD) :
+    {
+        . = ALIGN(4);
+        *(.ccmram*)
+        . = ALIGN(4);
+    } > CCMRAM
 
     /DISCARD/ :
     {

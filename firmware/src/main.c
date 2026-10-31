@@ -79,7 +79,7 @@ static void print_features(int k, const float *feats)
 /* Features of every window; with predict, also the model's region (full pipeline). */
 static void run_extract(int predict)
 {
-    static float feats[HIF_N_FEATURES];
+    static HIF_CCM float feats[HIF_N_FEATURES];
     hif_features_init();
     for (int k = 0; k < HIF_TV_COUNT; k++) {
         hif_extract_features(hif_tv_x[k], hif_tv_phase[k], feats);
@@ -116,13 +116,14 @@ static void profile_mark(void)
 
 static void run_bench(void)
 {
-    static float feats[HIF_TV_COUNT][HIF_N_FEATURES];
+    /* One feature vector, reused: with thousands of features one per window would not fit. */
+    static HIF_CCM float feats[HIF_N_FEATURES];
     hif_features_init();
 
     bench_mark(MARK_EXTRACT);
     for (int r = 0; r < BENCH_EXTRACT_REPEAT; r++)
         for (int k = 0; k < HIF_TV_COUNT; k++)
-            hif_extract_features(hif_tv_x[k], hif_tv_phase[k], feats[k]);
+            hif_extract_features(hif_tv_x[k], hif_tv_phase[k], feats);
     bench_mark(MARK_INFER);
     uint32_t wrong = 0;
     for (int i = 0; i < HIF_BENCH_ROWS; i++)
@@ -130,7 +131,7 @@ static void run_bench(void)
     bench_mark(MARK_END);
 
     bench_mark(MARK_PROFILE);
-    hif_extract_features_marked(hif_tv_x[0], hif_tv_phase[0], feats[0], profile_mark);
+    hif_extract_features_marked(hif_tv_x[0], hif_tv_phase[0], feats, profile_mark);
 
     uart_puts("BENCH,");
     uart_putu(BENCH_EXTRACT_REPEAT * HIF_TV_COUNT);
@@ -141,8 +142,9 @@ static void run_bench(void)
     uart_puts("\r\n");
     /* The benchmarked windows, through the whole pipeline, for the usual checks. */
     for (int k = 0; k < HIF_TV_COUNT; k++) {
-        print_features(k, feats[k]);
-        print_prediction(k, hif_predict(feats[k]));
+        hif_extract_features(hif_tv_x[k], hif_tv_phase[k], feats);
+        print_features(k, feats);
+        print_prediction(k, hif_predict(feats));
     }
 }
 #endif
