@@ -24,3 +24,17 @@ PLAN.md
 firmware/include/model.h
 firmware/include/test_vectors.h
 firmware/include/feature_config.h
+
+# LaTeX build files of the report.
+report/*.aux
+report/*.log
+report/*.toc
+report/*.fls
+report/*.fdb_latexmk
+report/*.bbl
+report/*.blg
+report/*.brf
+report/*.idx
+report/*.ilg
+report/*.ind
+report/*.out

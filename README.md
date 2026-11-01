@@ -16,7 +16,8 @@ using all of them or random subsets of the same size.
 > wavelet on CMSIS-DSP) matching the reference on every test window, the full pipeline
 > (raw window -> features -> model) agreeing 100% with scikit-learn on the simulated board, a
 > measurement harness, and an 80-configuration sweep over feature sets, models and compiler
-> settings, every point verified on the simulated device. Next: the write-up.
+> settings, every point verified on the simulated device, and the report
+> (`report/relatorio.tex` in Portuguese, `report/report.tex` in English).
 
 ## Main results
 
@@ -102,6 +103,9 @@ renode-test renode/hello.robot        # headless boot check
 .venv/bin/python python/measure.py --opt -Os # flash, RAM, stack, instructions -> results/measurements.csv
 .venv/bin/python python/sweep.py --workers 4 # all 80 configurations -> results/sweep.csv (~1 h)
 .venv/bin/python python/plots.py             # results/plots/*.png, results/sweep.md
+.venv/bin/python python/report_figures.py    # report figures (Portuguese and English)
+cd report && latexmk -pdf relatorio.tex      # the report (Portuguese)
+cd report && latexmk -pdf report.tex         # the report (English)
 .venv/bin/python -m pytest python -q         # reference vs pywt / scipy / thesis code
 ```
 
